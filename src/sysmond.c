@@ -50,6 +50,23 @@ void generate_report(void)
 	fflush(stdout);
 }
 
+void spawn_sensor(const char *sensor_path)
+{
+	pid_t pid = fork();
+	if (pid < 0)
+	{
+		perror("fork failed");
+		exit(EXIT_FAILURE);
+
+	} else if (pid == 0)
+		 {
+		    execl(sensor_path, sensor_path, NULL);
+
+                    perror("execl failed");
+	            exit(EXIT_FAILURE);
+		}
+}
+
 int main(void)
 {
 	if (mkdir(OUTPUT_DIR, 0777) == -1 && errno != EEXIST)
