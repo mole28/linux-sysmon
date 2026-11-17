@@ -11,3 +11,4 @@ modules.order
 
 bin/
 *.o
+src/job-queue2.c
