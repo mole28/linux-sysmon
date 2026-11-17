@@ -1,13 +1,15 @@
 CC = gcc
-CFLAGS = -Wall -g
+CFLAGS = -Wall -Wextra -Iinc -pthread
+LDFLAGS = -pthread
 
-TARGETS = bin/sysmond bin/mem_sensor bin/cpu_sensor bin/proc_sensor
+TARGET = bin/sysmond
+SRC = src/sysmond.c
 
-all: $(TARGETS)
+all: $(TARGET)
 
-bin/%: src/%.c
+$(TARGET): $(SRC) inc/sysmon.h
 	@mkdir -p bin
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $(SRC) -o $(TARGET) $(LDFLAGS)
 
 clean:
-	rm -rf bin/*
+	rm -rf bin

@@ -8,3 +8,6 @@
 modules.order
 .*.cmd
 .tmp_versions/
+
+bin/
+*.o
