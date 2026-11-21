@@ -1,73 +1,58 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
-#include <sys/stat.h>
-#include <errno.h>
+#include <signal.h>
+#include <sysmon_ipc.h>
 
-#define INTERVAL_SEC 2
-#define MEMINFO_PATH "/proc/meminfo"
-#define OUTPUT_DIR   "/tmp/sysmon"
-#define OUTPUT_FILE  "/tmp/sysmon/mem.dat"
+static volatile sig_atomic_t keep_running = 1;
 
-int collect_mem_metrics(void)
+static void handle_signal(int sig)
 {
-	FILE *fp_in = NULL;
-	FILE *fp_out = NULL;
-	char line[256];
-	int err = 0;
-
-	unsigned long mem_total = 0;
-	unsigned long mem_free = 0;
-	unsigned long mem_available = 0;
-	unsigned long swap_total = 0;
-	unsigned long swap_free = 0;
-
-	fp_in = fopen(MEMINFO_PATH, "r");
-	if (!fp_in)
-	{
-		perror("fopen /proc/meminfo");
-		return -errno;
-	}
-
-	while (fgets(line, sizeof(line), fp_in) != NULL)
-	{
-		sscanf(line, "MemTotal: %lu kB", &mem_total);
-		sscanf(line, "MemFree: %lu kB", &mem_free);
-		sscanf(line, "MemAvailable: %lu kB", &mem_available);
-		sscanf(line, "SwapTotal: %lu kB", &swap_total);
-		sscanf(line, "SwapFree: %lu kB", &swap_free);
-	}
-
-	fp_out = fopen(OUTPUT_FILE, "w");
-	if (!fp_out)
-	{
-		perror("fopen /tmp/sysmon/mem.dat");
-		err = -errno;
-		goto close_in;
-	}
-
-	fprintf(fp_out, "MemTotal:     %lu kB\n", mem_total);
-	fprintf(fp_out, "MemFree:      %lu kB\n", mem_free);
-	fprintf(fp_out, "MemAvailable: %lu kB\n", mem_available);
-	fprintf(fp_out, "SwapTotal:    %lu kB\n", swap_total);
-	fprintf(fp_out, "SwapFree:     %lu kB\n", swap_free);
-
-	fclose(fp_out);
-
-close_in:
-	fclose(fp_in);
-	return err;
+    (void)sig;
+    keep_running = 0;
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
-	mkdir(OUTPUT_DIR, 0777);
+    signal(SIGTERM, handle_signal);
+    signal(SIGINT, handle_signal);
+    signal(SIGPIPE, SIG_IGN);
 
-	while (1)
-	{
-		collect_mem_metrics();
-		sleep(INTERVAL_SEC);
-	}
+    int write_fd = STDOUT_FILENO;
+    if (argc > 1)
+    {
+        write_fd = atoi(argv[1]);
+    }
 
-	return 0;
+    while (keep_running)
+   {
+        FILE *fp = fopen("/proc/meminfo", "r");
+        if (fp != NULL)
+        {
+            MemData data;
+            memset(&data, 0, sizeof(MemData));
+            char line[256];
+
+            while (fgets(line, sizeof(line), fp))
+            {
+                sscanf(line, "MemTotal: %ld kB", &data.mem_total);
+                sscanf(line, "MemFree: %ld kB", &data.mem_free);
+                sscanf(line, "MemAvailable: %ld kB", &data.mem_avail);
+                sscanf(line, "SwapTotal: %ld kB", &data.swap_total);
+                sscanf(line, "SwapFree: %ld kB", &data.swap_free);
+            }
+            fclose(fp);
+
+            if (write(write_fd, &data, sizeof(MemData)) != sizeof(MemData))
+            {
+                break;
+            }
+        }
+        sleep(1);
+    }
+
+    close(write_fd);
+    return 0;
 }
+

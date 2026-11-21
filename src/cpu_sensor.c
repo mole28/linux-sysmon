@@ -1,73 +1,53 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
-#include <sys/stat.h>
-#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sysmon_ipc.h>
 
-#define INTERVAL_SEC 2
-#define LOADAVG_PATH "/proc/loadavg"
-#define OUTPUT_DIR   "/tmp/sysmon"
-#define OUTPUT_FILE  "/tmp/sysmon/cpu.dat"
+static volatile sig_atomic_t keep_running = 1;
 
-int collect_cpu_metrics(void)
+static void handle_signal(int sig)
 {
-	FILE *fp_in = NULL;
-	FILE *fp_out = NULL;
-	char line[256];
-	int err = 0;
-
-	float load_1 = 0.0f;
-	float load_5 = 0.0f;
-	float load_15 = 0.0f;
-
-	fp_in = fopen(LOADAVG_PATH, "r");
-	if (!fp_in)
-	{
-		perror("fopen /proc/loadavg");
-		return -errno;
-	}
-
-	if (fgets(line, sizeof(line), fp_in) == NULL)
-	{
-		perror("fgets /proc/loadavg");
-		err = -EIO;
-		goto close_in;
-	}
-
-	if (sscanf(line, "%f %f %f", &load_1, &load_5, &load_15) != 3)
-	{
-		fprintf(stderr, "Error parsing /proc/loadavg\n");
-		err = -EINVAL;
-		goto close_in;
-	}
-
-	fp_out = fopen(OUTPUT_FILE, "w");
-	if (!fp_out)
-	{
-		perror("fopen /tmp/sysmon/cpu.dat");
-		err = -errno;
-		goto close_in;
-	}
-
-	fprintf(fp_out, "CPU Load (1m, 5m, 15m): %.2f, %.2f, %.2f\n",
-		load_1, load_5, load_15);
-
-	fclose(fp_out);
-
-close_in:
-	fclose(fp_in);
-	return err;
+    (void)sig;
+    keep_running = 0;
 }
 
 int main(void)
 {
-	mkdir(OUTPUT_DIR, 0777);
+    signal(SIGTERM, handle_signal);
+    signal(SIGINT, handle_signal);
+    signal(SIGPIPE, SIG_IGN);
 
-	while (1)
-	{
-		collect_cpu_metrics();
-		sleep(INTERVAL_SEC);
-	}
+    int fifo_fd = open(CPU_FIFO_PATH, O_WRONLY);
+    if (fifo_fd < 0)
+    {
+        perror("cpu_sensor: open FIFO failed");
+        return 1;
+    }
 
-	return 0;
+    while (keep_running)
+    {
+        FILE *fp = fopen("/proc/loadavg", "r");
+        if (fp != NULL)
+        {
+            CpuData data;
+            memset(&data, 0, sizeof(CpuData));
+
+            if (fscanf(fp, "%lf %lf %lf", &data.load1, &data.load5, &data.load15) == 3)
+            {
+                if (write(fifo_fd, &data, sizeof(CpuData)) != sizeof(CpuData))
+                {
+                    fclose(fp);
+                    break;
+                }
+            }
+            fclose(fp);
+        }
+        sleep(1);
+    }
+
+    close(fifo_fd);
+    return 0;
 }
