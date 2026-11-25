@@ -1,2 +1,14 @@
-bin/*
-!bin/.gitkeep
+# Kernel module build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+modules.order
+.*.cmd
+.tmp_versions/
+
+bin/
+*.o
+src/job-queue2.c
