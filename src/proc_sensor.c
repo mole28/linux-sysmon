@@ -1,79 +1,88 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <ctype.h>
-#include <dirent.h>
+#include <string.h>
 #include <unistd.h>
-#include <sys/stat.h>
-#include <errno.h>
+#include <dirent.h>
+#include <ctype.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sysmon_ipc.h>
 
-#define INTERVAL_SEC 2
-#define PROC_PATH    "/proc"
-#define OUTPUT_DIR   "/tmp/sysmon"
-#define OUTPUT_FILE  "/tmp/sysmon/proc.dat"
+static volatile sig_atomic_t keep_running = 1;
 
-int is_pid_folder(const char *name)
+static void handle_signal(int sig)
 {
-	if (!name || *name == '\0')
-		return 0;
-
-	while (*name)
-	{
-		if (!isdigit((unsigned char)*name))
-			return 0;
-		name++;
-	}
-	return 1;
+    (void)sig;
+    keep_running = 0;
 }
 
-int collect_proc_metrics(void)
+static int is_pid_dir(const char *name)
 {
-	DIR *dir = NULL;
-	struct dirent *entry = NULL;
-	FILE *fp_out = NULL;
-	int proc_count = 0;
-	int err = 0;
-
-	dir = opendir(PROC_PATH);
-	if (!dir)
-	{
-		perror("opendir /proc");
-		return -errno;
-	}
-
-	while ((entry = readdir(dir)) != NULL)
-	{
-		if (is_pid_folder(entry->d_name))
-		{
-			proc_count++;
-		}
-	}
-
-	fp_out = fopen(OUTPUT_FILE, "w");
-	if (!fp_out)
-	{
-		perror("fopen /tmp/sysmon/proc.dat");
-		err = -errno;
-		goto close_dir;
-	}
-
-	fprintf(fp_out, "Active Processes: %d\n", proc_count);
-
-	fclose(fp_out);
-
-close_dir:
-	closedir(dir);
-	return err;
+    if (!name || *name == '\0') return 0;
+    while (*name)
+    {
+        if (!isdigit((unsigned char)*name)) return 0;
+        name++;
+    }
+    return 1;
 }
 
-int main(void)
+static unsigned int get_interval(int argc, char *argv[], int idx, unsigned int def_val)
 {
-	mkdir(OUTPUT_DIR, 0777);
+    if (argc > idx && argv[idx] != NULL)
+    {
+        long v = strtol(argv[idx], NULL, 10);
+        if (v > 0 && v <= 86400)
+        {
+            return (unsigned int)v;
+        }
+    }
+    return def_val;
+}
 
-	while (1)
-	{
-		collect_proc_metrics();
-		sleep(INTERVAL_SEC);
-	}
+int main(int argc, char *argv[])
+{
+    signal(SIGTERM, handle_signal);
+    signal(SIGINT, handle_signal);
+    signal(SIGPIPE, SIG_IGN);
 
-	return 0;
+    unsigned int interval = get_interval(argc, argv, 1, 5);
+
+    int fifo_fd = open(PROC_FIFO_PATH, O_WRONLY);
+    if (fifo_fd < 0)
+    {
+        perror("proc_sensor: open FIFO failed");
+        return 1;
+    }
+
+    while (keep_running)
+    {
+        DIR *dir = opendir("/proc");
+        if (dir != NULL)
+        {
+            int count = 0;
+            struct dirent *entry;
+
+            while ((entry = readdir(dir)) != NULL)
+            {
+                if (is_pid_dir(entry->d_name))
+                {
+                    count++;
+                }
+            }
+            closedir(dir);
+
+            ProcData data;
+            data.total_procs = count;
+
+            if (write(fifo_fd, &data, sizeof(ProcData)) != sizeof(ProcData))
+            {
+                break;
+            }
+        }
+        sleep(interval);
+    }
+
+    close(fifo_fd);
+    return 0;
 }
